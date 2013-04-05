@@ -12,7 +12,6 @@ AnyEvent::Fork::Early - avoid having to exec another perl interpreter
 
    # now you can do other stuff
 
-
 =head1 DESCRIPTION
 
 L<AnyEvent::Fork> normally spawns a new perl process by executing the perl
@@ -47,10 +46,9 @@ package AnyEvent::Fork::Early;
 
 # load stuff we need anyways
 use AnyEvent::Fork ();
-use AnyEvent::Fork::Util ();
 
 # this does not work on win32, due to the atrociously bad fake perl fork
-unless (AnyEvent::Fork::Util::WIN32) {
+unless ($^O eq "MSWin32") {
    # we preload certain modules because sooner or later, somebody will use them.
    # complain to me if that causes trouble.
    require common::sense;
@@ -59,8 +57,11 @@ unless (AnyEvent::Fork::Util::WIN32) {
    require feature if $] >= 5.010;
    require Carp;
 
+   require common::sense;
+   require IO::FDPass;
+
    $AnyEvent::Fork::TEMPLATE =
-   $AnyEvent::Fork::EARLY    = AnyEvent::Fork->_new_fork ("fork/early");
+   $AnyEvent::Fork::EARLY    = AnyEvent::Fork->_new_fork ("AnyEvent::Fork::Early");
 }
 
 =head1 AUTHOR

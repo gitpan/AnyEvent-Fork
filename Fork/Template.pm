@@ -19,13 +19,25 @@ AnyEvent::Fork::Template - generate a template process from the main program
    my $w = AE::io ...;
 
    # and finally, use the template to run some workers
-   $TEMPLATE->fork->run ("My::Worker::Module::run_worker", sub { ... });
+   $AnyEvent::Fork::Template->fork->run ("My::Worker::Module::run_worker", sub { ... });
 
 =head1 DESCRIPTION
 
 =head1 EXPORTS
 
-By default, this module exports the C<$TEMPLATE> variable.
+By default, this module forks when it is used the first time and stores
+the resulting L<AnyEvent::Fork> object in the C<$AnyEvent::Fork::Template>
+variable (mnemonic: same name as the module itself).
+
+It must only be used in the main program, and only once. Other than that,
+the only requirement is that you can handle the results of a fork at that
+time, i.e., when you use this module after AnyEvent has been initialised,
+or use it after you opened osme window with Gtk2 or Tk for example then
+then you can't easily use these modules in the forked process. Chosing the
+place to use this module wisely is key.
+
+There is never a need for this module - you can always create a new empty
+process and loading the modules you need into it.
 
 =cut
 
@@ -33,16 +45,11 @@ package AnyEvent::Fork::Template;
 
 use AnyEvent::Fork ();
 
-require Exporter;
-
-our @ISA = Exporter::;
-our @EXPORT = qw($TEMPLATE);
-
 # this does not work on win32, due to the atrociously bad fake perl fork
 die "AnyEvent::Fork::Template does not work on WIN32 due to bugs in perl\n"
-   if AnyEvent::Fork::Util::WIN32;
+   if $^O eq "MSWin32";
 
-our $TEMPLATE = AnyEvent::Fork->_new_fork ("fork/template");
+$AnyEvent::Fork::Template = AnyEvent::Fork->_new_fork ("AnyEvent::Fork::Template");
 
 =head1 AUTHOR
 

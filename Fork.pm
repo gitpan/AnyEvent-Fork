@@ -2,9 +2,6 @@
 
 AnyEvent::Fork - everything you wanted to use fork() for, but couldn't
 
-ATTENTION, this is a very early release, and very untested. Consider it a
-technology preview.
-
 =head1 SYNOPSIS
 
    use AnyEvent::Fork;
@@ -246,10 +243,11 @@ use common::sense;
 use Socket ();
 
 use AnyEvent;
-use AnyEvent::Fork::Util;
 use AnyEvent::Util ();
 
-our $VERSION = $AnyEvent::Fork::Util::VERSION;
+use IO::FDPass;
+
+our $VERSION = 0.2;
 
 our $PERL; # the path to the perl interpreter, deduces with various forms of magic
 
@@ -284,7 +282,7 @@ sub _cmd {
 
       if (ref $self->[2][0]) {
          # send fh
-         AnyEvent::Fork::Util::fd_send fileno $self->[1], fileno ${ $self->[2][0] }
+         IO::FDPass::send fileno $self->[1], fileno ${ $self->[2][0] }
             and shift @{ $self->[2] };
 
       } else {
@@ -302,6 +300,8 @@ sub _cmd {
          $self->[0]->($self->[1]) if $self->[0];
       }
    };
+
+   () # make sure we don't leak the watcher
 }
 
 sub _new {
@@ -332,7 +332,7 @@ sub _new_fork {
       close $fh;
       $0 = "$_[1] of $parent";
       AnyEvent::Fork::Serve::serve ($slave);
-      AnyEvent::Fork::Util::_exit 0;
+      exit 0;
    } elsif (!$pid) {
       die "AnyEvent::Fork::Early/Template: unable to fork template process: $!";
    }
@@ -417,7 +417,7 @@ sub new_exec {
    # first we try $^X, but the path must be absolute (always on win32), and end in sth.
    # that looks like perl. this obviously only works for posix and win32
    unless (
-      (AnyEvent::Fork::Util::WIN32 || $perl =~ m%^/%)
+      ($^O eq "MSWin32" || $perl =~ m%^/%)
       && $perl =~ m%[/\\]perl(?:[0-9]+(\.[0-9]+)+)?(\.exe)?$%i
    ) {
       # if it doesn't look perlish enough, try Config
@@ -438,7 +438,7 @@ sub new_exec {
    # quick. also doesn't work in win32. of course. what did you expect
    #local $ENV{PERL5LIB} = join ":", grep !ref, @INC;
    my %env = %ENV;
-   $env{PERL5LIB} = join +(AnyEvent::Fork::Util::WIN32 ? ";" : ":"), grep !ref, @INC;
+   $env{PERL5LIB} = join +($^O eq "MSWin32" ? ";" : ":"), grep !ref, @INC;
 
    Proc::FastSpawn::spawn (
       $perl,
@@ -605,6 +605,64 @@ sub run {
 
 =back
 
+=head1 TYPICAL PROBLEMS
+
+This section lists typical problems that remain. I hope by recognising
+them, most can be avoided.
+
+=over 4
+
+=item "leaked" file descriptors for exec'ed processes
+
+POSIX systems inherit file descriptors by default when exec'ing a new
+process. While perl itself laudably sets the close-on-exec flags on new
+file handles, most C libraries don't care, and even if all cared, it's
+often not possible to set the flag in a race-free manner.
+
+That means some file descriptors can leak through. And since it isn't
+possible to know which file descriptors are "good" and "neccessary" (or
+even to know which file descreiptors are open), there is no good way to
+close the ones that might harm.
+
+As an example of what "harm" can be done consider a web server that
+accepts connections and afterwards some module uses AnyEvent::Fork for the
+first time, causing it to fork and exec a new process, which might inherit
+the network socket. When the server closes the socket, it is still open
+in the child (which doesn't even know that) and the client might conclude
+that the connection is still fine.
+
+For the main program, there are multiple remedies available -
+L<AnyEvent::Fork::Early> is one, creating a process early and not using
+C<new_exec> is another, as in both cases, the first process can be exec'ed
+well before many random file descriptors are open.
+
+In general, the solution for these kind of problems is to fix the
+libraries or the code that leaks those file descriptors.
+
+Fortunately, most of these lekaed descriptors do no harm, other than
+sitting on some resources.
+
+=item "leaked" file descriptors for fork'ed processes
+
+Normally, L<AnyEvent::Fork> does start new processes by exec'ing them,
+which closes file descriptors not marked for being inherited.
+
+However, L<AnyEvent::Fork::Early> and L<AnyEvent::Fork::Template> offer
+a way to create these processes by forking, and this leaks more file
+descriptors than exec'ing them, as there is no way to mark descriptors as
+"close on fork".
+
+An example would be modules like L<EV>, L<IO::AIO> or L<Gtk2>. Both create
+pipes for internal uses, and L<Gtk2> might open a connection to the X
+server. L<EV> and L<IO::AIO> can deal with fork, but Gtk2 might have
+trouble with a fork.
+
+The solution is to either not load these modules before use'ing
+L<AnyEvent::Fork::Early> or L<AnyEvent::Fork::Template>, or to delay
+initialising them, for example, by calling C<init Gtk2> manually.
+
+=back
+
 =head1 PORTABILITY NOTES
 
 Native win32 perls are somewhat supported (AnyEvent::Fork::Early is a nop,
@@ -617,6 +675,12 @@ issues or other braindamage. Hrrrr.
 Cygwin perl is not supported at the moment, as it should implement fd
 passing, but doesn't, and rolling my own is hard, as cygwin doesn't
 support enough functionality to do it.
+
+=head1 SEE ALSO
+
+L<AnyEvent::Fork::Early> (to avoid executing a perl interpreter),
+L<AnyEvent::Fork::Template> (to create a process by forking the main
+program at a convenient time).
 
 =head1 AUTHOR
 

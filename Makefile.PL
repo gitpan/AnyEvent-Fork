@@ -9,10 +9,11 @@ WriteMakefile(
 	            SUFFIX	=> '.gz',
 	           },
     NAME => "AnyEvent::Fork",
-    VERSION_FROM => "Fork/Util.pm",
+    VERSION_FROM => "Fork.pm",
     PREREQ_PM => {
        common::sense   => 3.6,
        Proc::FastSpawn => 0.1,
+       IO::FDPass      => 0.2,
        AnyEvent        => 6,
     },
 );

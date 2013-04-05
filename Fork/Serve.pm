@@ -1,15 +1,15 @@
 package AnyEvent::Fork::Serve;
 
-use common::sense;
-use AnyEvent::Fork::Util;
+use common::sense; # actually required to avoid spurious warnings...
+use IO::FDPass;
 
 our $OWNER; # pid of process "owning" us
 
 # commands understood:
-# e eval
+# e eval perlcode strings...
 # f fork [fh]
 # h handle
-# a args
+# a args strings...
 # r run func [args...]
 
 sub serve;
@@ -44,9 +44,9 @@ sub serve {
 
       #warn "cmd<$cmd,@val>\n";
       if ($cmd eq "h") {
-         my $fd = AnyEvent::Fork::Util::fd_recv fileno $master;
+         my $fd = IO::FDPass::recv fileno $master;
          $fd >= 0 or error "AnyEvent::Fork::Serve: fd_recv() failed: $!";
-         open my $fh, "+>&=$fd" or error "AnyEvent::Fork::Serve: open (fd_recv) failed: $!";
+         open my $fh, "+<&=$fd" or error "AnyEvent::Fork::Serve: open (fd_recv) failed: $!";
          push @arg, $fh;
 
       } elsif ($cmd eq "a") {
@@ -56,7 +56,7 @@ sub serve {
          my $pid = fork;
 
          if ($pid eq 0) {
-            $0 = "fork/fork of $OWNER";
+            $0 = "AnyEvent::Fork of $OWNER";
             @_ = pop @arg;
             goto &serve;
          } else {
@@ -75,6 +75,7 @@ sub serve {
          # we could free &serve etc., but this might just unshare
          # memory that could be shared otherwise.
          @_ = ($master, @arg);
+         $0 = "$val[0] of $OWNER";
          goto &{ $val[0] };
 
       } else {
@@ -91,7 +92,7 @@ sub me {
 
    $OWNER = $ARGV[1];
 
-   $0 = "fork/exec of $OWNER";
+   $0 = "AnyEvent::Fork/exec of $OWNER";
 
    @ARGV = ();
    @_ = $fh;

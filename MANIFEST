@@ -4,8 +4,6 @@ MANIFEST
 COPYING
 Makefile.PL
 Fork.pm
-Fork.xs
-Fork/Util.pm
 Fork/Serve.pm
 Fork/Early.pm
 Fork/Template.pm

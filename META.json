@@ -33,11 +33,12 @@
       "runtime" : {
          "requires" : {
             "AnyEvent" : "6",
+            "IO::FDPass" : "0.2",
             "Proc::FastSpawn" : "0.1",
             "common::sense" : "3.6"
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.01"
+   "version" : "0.2"
 }

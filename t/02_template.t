@@ -9,11 +9,13 @@ BEGIN { $| = 1; print "1..3\n"; }
 
 use AnyEvent::Fork::Template;
 
-print $TEMPLATE ? "" : "not ", "ok 1\n";
+my $proc = $AnyEvent::Fork::Template;
 
-$TEMPLATE->eval ('print "ok 2\n"; exit 0');
+print $proc ? "" : "not ", "ok 1\n";
 
-my $w = AE::io $TEMPLATE->[1], 0, my $cv = AE::cv;
+$proc->eval ('print "ok 2\n"; exit 0');
+
+my $w = AE::io $proc->[1], 0, my $cv = AE::cv;
 $cv->recv;
 
 print "ok 3\n";

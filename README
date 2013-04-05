@@ -1,9 +1,6 @@
 NAME
     AnyEvent::Fork - everything you wanted to use fork() for, but couldn't
 
-    ATTENTION, this is a very early release, and very untested. Consider it
-    a technology preview.
-
 SYNOPSIS
        use AnyEvent::Fork;
 
@@ -359,6 +356,58 @@ FUNCTIONS
               print scalar <$fh>; # prints "hi 1\n" and "hi 2\n"
            }
 
+TYPICAL PROBLEMS
+    This section lists typical problems that remain. I hope by recognising
+    them, most can be avoided.
+
+    "leaked" file descriptors for exec'ed processes
+        POSIX systems inherit file descriptors by default when exec'ing a
+        new process. While perl itself laudably sets the close-on-exec flags
+        on new file handles, most C libraries don't care, and even if all
+        cared, it's often not possible to set the flag in a race-free
+        manner.
+
+        That means some file descriptors can leak through. And since it
+        isn't possible to know which file descriptors are "good" and
+        "neccessary" (or even to know which file descreiptors are open),
+        there is no good way to close the ones that might harm.
+
+        As an example of what "harm" can be done consider a web server that
+        accepts connections and afterwards some module uses AnyEvent::Fork
+        for the first time, causing it to fork and exec a new process, which
+        might inherit the network socket. When the server closes the socket,
+        it is still open in the child (which doesn't even know that) and the
+        client might conclude that the connection is still fine.
+
+        For the main program, there are multiple remedies available -
+        AnyEvent::Fork::Early is one, creating a process early and not using
+        "new_exec" is another, as in both cases, the first process can be
+        exec'ed well before many random file descriptors are open.
+
+        In general, the solution for these kind of problems is to fix the
+        libraries or the code that leaks those file descriptors.
+
+        Fortunately, most of these lekaed descriptors do no harm, other than
+        sitting on some resources.
+
+    "leaked" file descriptors for fork'ed processes
+        Normally, AnyEvent::Fork does start new processes by exec'ing them,
+        which closes file descriptors not marked for being inherited.
+
+        However, AnyEvent::Fork::Early and AnyEvent::Fork::Template offer a
+        way to create these processes by forking, and this leaks more file
+        descriptors than exec'ing them, as there is no way to mark
+        descriptors as "close on fork".
+
+        An example would be modules like EV, IO::AIO or Gtk2. Both create
+        pipes for internal uses, and Gtk2 might open a connection to the X
+        server. EV and IO::AIO can deal with fork, but Gtk2 might have
+        trouble with a fork.
+
+        The solution is to either not load these modules before use'ing
+        AnyEvent::Fork::Early or AnyEvent::Fork::Template, or to delay
+        initialising them, for example, by calling "init Gtk2" manually.
+
 PORTABILITY NOTES
     Native win32 perls are somewhat supported (AnyEvent::Fork::Early is a
     nop, and ::Template is not going to work), and it cost a lot of blood
@@ -370,6 +419,11 @@ PORTABILITY NOTES
     Cygwin perl is not supported at the moment, as it should implement fd
     passing, but doesn't, and rolling my own is hard, as cygwin doesn't
     support enough functionality to do it.
+
+SEE ALSO
+    AnyEvent::Fork::Early (to avoid executing a perl interpreter),
+    AnyEvent::Fork::Template (to create a process by forking the main
+    program at a convenient time).
 
 AUTHOR
      Marc Lehmann <schmorp@schmorp.de>
