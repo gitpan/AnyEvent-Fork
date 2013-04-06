@@ -6,8 +6,161 @@ AnyEvent::Fork - everything you wanted to use fork() for, but couldn't
 
    use AnyEvent::Fork;
 
-   ##################################################################
-   # create a single new process, tell it to run your worker function
+   AnyEvent::Fork
+      ->new
+      ->require ("MyModule")
+      ->run ("MyModule::server", my $cv = AE::cv);
+
+   my $fh = $cv->recv;
+
+=head1 DESCRIPTION
+
+This module allows you to create new processes, without actually forking
+them from your current process (avoiding the problems of forking), but
+preserving most of the advantages of fork.
+
+It can be used to create new worker processes or new independent
+subprocesses for short- and long-running jobs, process pools (e.g. for use
+in pre-forked servers) but also to spawn new external processes (such as
+CGI scripts from a web server), which can be faster (and more well behaved)
+than using fork+exec in big processes.
+
+Special care has been taken to make this module useful from other modules,
+while still supporting specialised environments such as L<App::Staticperl>
+or L<PAR::Packer>.
+
+=head2 WHAT THIS MODULE IS NOT
+
+This module only creates processes and lets you pass file handles and
+strings to it, and run perl code. It does not implement any kind of RPC -
+there is no back channel from the process back to you, and there is no RPC
+or message passing going on.
+
+If you need some form of RPC, you can either implement it yourself
+in whatever way you like, use some message-passing module such
+as L<AnyEvent::MP>, some pipe such as L<AnyEvent::ZeroMQ>, use
+L<AnyEvent::Handle> on both sides to send e.g. JSON or Storable messages,
+and so on.
+
+=head2 COMPARISON TO OTHER MODULES
+
+There is an abundance of modules on CPAN that do "something fork", such as
+L<Parallel::ForkManager>, L<AnyEvent::ForkManager>, L<AnyEvent::Worker>
+or L<AnyEvent::Subprocess>. There are modules that implement their own
+process management, such as L<AnyEvent::DBI>.
+
+The problems that all these modules try to solve are real, however, none
+of them (from what I have seen) tackle the very real problems of unwanted
+memory sharing, efficiency, not being able to use event processing or
+similar modules in the processes they create.
+
+This module doesn't try to replace any of them - instead it tries to solve
+the problem of creating processes with a minimum of fuss and overhead (and
+also luxury). Ideally, most of these would use AnyEvent::Fork internally,
+except they were written before AnyEvent:Fork was available, so obviously
+had to roll their own.
+
+=head2 PROBLEM STATEMENT
+
+There are two traditional ways to implement parallel processing on UNIX
+like operating systems - fork and process, and fork+exec and process. They
+have different advantages and disadvantages that I describe below,
+together with how this module tries to mitigate the disadvantages.
+
+=over 4
+
+=item Forking from a big process can be very slow.
+
+A 5GB process needs 0.05s to fork on my 3.6GHz amd64 GNU/Linux box. This
+overhead is often shared with exec (because you have to fork first), but
+in some circumstances (e.g. when vfork is used), fork+exec can be much
+faster.
+
+This module can help here by telling a small(er) helper process to fork,
+which is faster then forking the main process, and also uses vfork where
+possible. This gives the speed of vfork, with the flexibility of fork.
+
+=item Forking usually creates a copy-on-write copy of the parent
+process.
+
+For example, modules or data files that are loaded will not use additional
+memory after a fork. When exec'ing a new process, modules and data files
+might need to be loaded again, at extra CPU and memory cost. But when
+forking, literally all data structures are copied - if the program frees
+them and replaces them by new data, the child processes will retain the
+old version even if it isn't used, which can suddenly and unexpectedly
+increase memory usage when freeing memory.
+
+The trade-off is between more sharing with fork (which can be good or
+bad), and no sharing with exec.
+
+This module allows the main program to do a controlled fork, and allows
+modules to exec processes safely at any time. When creating a custom
+process pool you can take advantage of data sharing via fork without
+risking to share large dynamic data structures that will blow up child
+memory usage.
+
+In other words, this module puts you into control over what is being
+shared and what isn't, at all times.
+
+=item Exec'ing a new perl process might be difficult.
+
+For example, it is not easy to find the correct path to the perl
+interpreter - C<$^X> might not be a perl interpreter at all.
+
+This module tries hard to identify the correct path to the perl
+interpreter. With a cooperative main program, exec'ing the interpreter
+might not even be necessary, but even without help from the main program,
+it will still work when used from a module.
+
+=item Exec'ing a new perl process might be slow, as all necessary modules
+have to be loaded from disk again, with no guarantees of success.
+
+Long running processes might run into problems when perl is upgraded
+and modules are no longer loadable because they refer to a different
+perl version, or parts of a distribution are newer than the ones already
+loaded.
+
+This module supports creating pre-initialised perl processes to be used as
+a template for new processes.
+
+=item Forking might be impossible when a program is running.
+
+For example, POSIX makes it almost impossible to fork from a
+multi-threaded program while doing anything useful in the child - in
+fact, if your perl program uses POSIX threads (even indirectly via
+e.g. L<IO::AIO> or L<threads>), you cannot call fork on the perl level
+anymore without risking corruption issues on a number of operating
+systems.
+
+This module can safely fork helper processes at any time, by calling
+fork+exec in C, in a POSIX-compatible way (via L<Proc::FastSpawn>).
+
+=item Parallel processing with fork might be inconvenient or difficult
+to implement. Modules might not work in both parent and child.
+
+For example, when a program uses an event loop and creates watchers it
+becomes very hard to use the event loop from a child program, as the
+watchers already exist but are only meaningful in the parent. Worse, a
+module might want to use such a module, not knowing whether another module
+or the main program also does, leading to problems.
+
+Apart from event loops, graphical toolkits also commonly fall into the
+"unsafe module" category, or just about anything that communicates with
+the external world, such as network libraries and file I/O modules, which
+usually don't like being copied and then allowed to continue in two
+processes.
+
+With this module only the main program is allowed to create new processes
+by forking (because only the main program can know when it is still safe
+to do so) - all other processes are created via fork+exec, which makes it
+possible to use modules such as event loops or window interfaces safely.
+
+=back
+
+=head1 EXAMPLES
+
+=head2 Create a single new process, tell it to run your worker function.
 
    AnyEvent::Fork
       ->new
@@ -19,16 +172,18 @@ AnyEvent::Fork - everything you wanted to use fork() for, but couldn't
          # $slave_filehandle in the new process.
       });
 
-   # MyModule::worker might look like this
-   sub MyModule::worker {
+C<MyModule> might look like this:
+
+   package MyModule;
+
+   sub worker {
       my ($slave_filehandle) = @_;
 
       # now $slave_filehandle is connected to the $master_filehandle
       # in the original prorcess. have fun!
    }
 
-   ##################################################################
-   # create a pool of server processes all accepting on the same socket
+=head2 Create a pool of server processes all accepting on the same socket.
 
    # create listener socket
    my $listener = ...;
@@ -50,8 +205,11 @@ AnyEvent::Fork - everything you wanted to use fork() for, but couldn't
    # now do other things - maybe use the filehandle provided by run
    # to wait for the processes to die. or whatever.
 
-   # My::Server::run might look like this
-   sub My::Server::run {
+C<My::Server> might look like this:
+
+   package My::Server;
+
+   sub run {
       my ($slave, $listener, $id) = @_;
 
       close $slave; # we do not use the socket, so close it to save resources
@@ -63,98 +221,33 @@ AnyEvent::Fork - everything you wanted to use fork() for, but couldn't
       }
    }
 
-=head1 DESCRIPTION
+=head2 use AnyEvent::Fork as a faster fork+exec
 
-This module allows you to create new processes, without actually forking
-them from your current process (avoiding the problems of forking), but
-preserving most of the advantages of fork.
+This runs C</bin/echo hi>, with stdandard output redirected to /tmp/log
+and standard error redirected to the communications socket. It is usually
+faster than fork+exec, but still lets you prepare the environment.
 
-It can be used to create new worker processes or new independent
-subprocesses for short- and long-running jobs, process pools (e.g. for use
-in pre-forked servers) but also to spawn new external processes (such as
-CGI scripts from a web server), which can be faster (and more well behaved)
-than using fork+exec in big processes.
+   open my $output, ">/tmp/log" or die "$!";
 
-Special care has been taken to make this module useful from other modules,
-while still supporting specialised environments such as L<App::Staticperl>
-or L<PAR::Packer>.
+   AnyEvent::Fork
+      ->new
+      ->eval ('
+           # compile a helper function for later use
+           sub run {
+              my ($fh, $output, @cmd) = @_;
 
-=head1 WHAT THIS MODULE IS NOT
+              # perl will clear close-on-exec on STDOUT/STDERR
+              open STDOUT, ">&", $output or die;
+              open STDERR, ">&", $fh or die;
 
-This module only creates processes and lets you pass file handles and
-strings to it, and run perl code. It does not implement any kind of RPC -
-there is no back channel from the process back to you, and there is no RPC
-or message passing going on.
+              exec @cmd;
+           }
+        ')
+      ->send_fh ($output)
+      ->send_arg ("/bin/echo", "hi")
+      ->run ("run", my $cv = AE::cv);
 
-If you need some form of RPC, you can either implement it yourself
-in whatever way you like, use some message-passing module such
-as L<AnyEvent::MP>, some pipe such as L<AnyEvent::ZeroMQ>, use
-L<AnyEvent::Handle> on both sides to send e.g. JSON or Storable messages,
-and so on.
-
-=head1 PROBLEM STATEMENT
-
-There are two ways to implement parallel processing on UNIX like operating
-systems - fork and process, and fork+exec and process. They have different
-advantages and disadvantages that I describe below, together with how this
-module tries to mitigate the disadvantages.
-
-=over 4
-
-=item Forking from a big process can be very slow (a 5GB process needs
-0.05s to fork on my 3.6GHz amd64 GNU/Linux box for example). This overhead
-is often shared with exec (because you have to fork first), but in some
-circumstances (e.g. when vfork is used), fork+exec can be much faster.
-
-This module can help here by telling a small(er) helper process to fork,
-or fork+exec instead.
-
-=item Forking usually creates a copy-on-write copy of the parent
-process. Memory (for example, modules or data files that have been
-will not take additional memory). When exec'ing a new process, modules
-and data files might need to be loaded again, at extra CPU and memory
-cost. Likewise when forking, all data structures are copied as well - if
-the program frees them and replaces them by new data, the child processes
-will retain the memory even if it isn't used.
-
-This module allows the main program to do a controlled fork, and allows
-modules to exec processes safely at any time. When creating a custom
-process pool you can take advantage of data sharing via fork without
-risking to share large dynamic data structures that will blow up child
-memory usage.
-
-=item Exec'ing a new perl process might be difficult and slow. For
-example, it is not easy to find the correct path to the perl interpreter,
-and all modules have to be loaded from disk again. Long running processes
-might run into problems when perl is upgraded for example.
-
-This module supports creating pre-initialised perl processes to be used
-as template, and also tries hard to identify the correct path to the perl
-interpreter. With a cooperative main program, exec'ing the interpreter
-might not even be necessary.
-
-=item Forking might be impossible when a program is running. For example,
-POSIX makes it almost impossible to fork from a multi-threaded program and
-do anything useful in the child - strictly speaking, if your perl program
-uses posix threads (even indirectly via e.g. L<IO::AIO> or L<threads>),
-you cannot call fork on the perl level anymore, at all.
-
-This module can safely fork helper processes at any time, by calling
-fork+exec in C, in a POSIX-compatible way.
-
-=item Parallel processing with fork might be inconvenient or difficult
-to implement. For example, when a program uses an event loop and creates
-watchers it becomes very hard to use the event loop from a child
-program, as the watchers already exist but are only meaningful in the
-parent. Worse, a module might want to use such a system, not knowing
-whether another module or the main program also does, leading to problems.
-
-This module only lets the main program create pools by forking (because
-only the main program can know when it is still safe to do so) - all other
-pools are created by fork+exec, after which such modules can again be
-loaded.
-
-=back
+   my $stderr = $cv->recv;
 
 =head1 CONCEPTS
 
@@ -243,7 +336,26 @@ Example:
 
 =back
 
-=head1 FUNCTIONS
+=head1 THE C<AnyEvent::Fork> CLASS
+
+This module exports nothing, and only implements a single class -
+C<AnyEvent::Fork>.
+
+There are two class constructors that both create new processes - C<new>
+and C<new_exec>. The C<fork> method creates a new process by forking an
+existing one and could be considered a third constructor.
+
+Most of the remaining methods deal with preparing the new process, by
+loading code, evaluating code and sending data to the new process. They
+usually return the process object, so you can chain method calls.
+
+If a process object is destroyed before calling its C<run> method, then
+the process simply exits. After C<run> is called, all responsibility is
+passed to the specified function.
+
+As long as there is any outstanding work to be done, process objects
+resist being destroyed, so there is no reason to store them unless you
+need them later - configure and forget works just fine.
 
 =over 4
 
@@ -260,13 +372,9 @@ use AnyEvent::Util ();
 
 use IO::FDPass;
 
-our $VERSION = 0.5;
+our $VERSION = 0.6;
 
 our $PERL; # the path to the perl interpreter, deduces with various forms of magic
-
-=item my $pool = new AnyEvent::Fork key => value...
-
-Create a new process pool. The following named parameters are supported:
 
 =over 4
 
@@ -372,12 +480,7 @@ object for further manipulation.
 
 The new process is forked from a template process that is kept around
 for this purpose. When it doesn't exist yet, it is created by a call to
-C<new_exec> and kept around for future calls.
-
-When the process object is destroyed, it will release the file handle
-that connects it with the new process. When the new process has not yet
-called C<run>, then the process will exit. Otherwise, what happens depends
-entirely on the code that is executed.
+C<new_exec> first and then stays around for future calls.
 
 =cut
 
@@ -477,14 +580,14 @@ sub new_exec {
 =item $pid = $proc->pid
 
 Returns the process id of the process I<iff it is a direct child of the
-process> running AnyEvent::Fork, and C<undef> otherwise.
+process running AnyEvent::Fork>, and C<undef> otherwise.
 
 Normally, only processes created via C<< AnyEvent::Fork->new_exec >> and
 L<AnyEvent::Fork::Template> are direct children, and you are responsible
 to clean up their zombies when they die.
 
 All other processes are not direct children, and will be cleaned up by
-AnyEvent::Fork.
+AnyEvent::Fork itself.
 
 =cut
 
@@ -495,7 +598,7 @@ sub pid {
 =item $proc = $proc->eval ($perlcode, @args)
 
 Evaluates the given C<$perlcode> as ... perl code, while setting C<@_> to
-the strings specified by C<@args>.
+the strings specified by C<@args>, in the "main" package.
 
 This call is meant to do any custom initialisation that might be required
 (for example, the C<require> method uses it). It's not supposed to be used
@@ -504,6 +607,12 @@ to completely take over the process, use C<run> for that.
 The code will usually be executed after this call returns, and there is no
 way to pass anything back to the calling process. Any evaluation errors
 will be reported to stderr and cause the process to exit.
+
+If you want to execute some code (that isn't in a module) to take over the
+process, you should compile a function via C<eval> first, and then call
+it via C<run>. This also gives you access to any arguments passed via the
+C<send_xxx> methods, such as file handles. See the L<use AnyEvent::Fork as
+a faster fork+exec> example to see it in action.
 
 Returns the process object for easy chaining of method calls.
 
@@ -539,10 +648,11 @@ sub require {
 Send one or more file handles (I<not> file descriptors) to the process,
 to prepare a call to C<run>.
 
-The process object keeps a reference to the handles until this is done,
-so you must not explicitly close the handles. This is most easily
-accomplished by simply not storing the file handles anywhere after passing
-them to this method.
+The process object keeps a reference to the handles until they have
+been passed over to the process, so you must not explicitly close the
+handles. This is most easily accomplished by simply not storing the file
+handles anywhere after passing them to this method - when AnyEvent::Fork
+is finished using them, perl will automatically close them.
 
 Returns the process object for easy chaining of method calls.
 
@@ -568,7 +678,7 @@ sub send_fh {
 =item $proc = $proc->send_arg ($string, ...)
 
 Send one or more argument strings to the process, to prepare a call to
-C<run>. The strings can be any octet string.
+C<run>. The strings can be any octet strings.
 
 The protocol is optimised to pass a moderate number of relatively short
 strings - while you can pass up to 4GB of data in one go, this is more
@@ -589,27 +699,35 @@ sub send_arg {
 
 =item $proc->run ($func, $cb->($fh))
 
-Enter the function specified by the fully qualified name in C<$func> in
-the process. The function is called with the communication socket as first
+Enter the function specified by the function name in C<$func> in the
+process. The function is called with the communication socket as first
 argument, followed by all file handles and string arguments sent earlier
 via C<send_fh> and C<send_arg> methods, in the order they were called.
 
-If the called function returns, the process exits.
+The process object becomes unusable on return from this function - any
+further method calls result in undefined behaviour.
 
-Preparing the process can take time - when the process is ready, the
-callback is invoked with the local communications socket as argument.
+The function name should be fully qualified, but if it isn't, it will be
+looked up in the C<main> package.
 
-The process object becomes unusable on return from this function.
+If the called function returns, doesn't exist, or any error occurs, the
+process exits.
+
+Preparing the process is done in the background - when all commands have
+been sent, the callback is invoked with the local communications socket
+as argument. At this point you can start using the socket in any way you
+like.
 
 If the communication socket isn't used, it should be closed on both sides,
 to save on kernel memory.
 
 The socket is non-blocking in the parent, and blocking in the newly
-created process. The close-on-exec flag is set on both. Even if not used
-otherwise, the socket can be a good indicator for the existence of the
-process - if the other process exits, you get a readable event on it,
-because exiting the process closes the socket (if it didn't create any
-children using fork).
+created process. The close-on-exec flag is set in both.
+
+Even if not used otherwise, the socket can be a good indicator for the
+existence of the process - if the other process exits, you get a readable
+event on it, because exiting the process closes the socket (if it didn't
+create any children using fork).
 
 Example: create a template for a process pool, pass a few strings, some
 file handles, then fork, pass one more string, and run some code.
@@ -627,7 +745,7 @@ file handles, then fork, pass one more string, and run some code.
             my ($fh) = @_;
 
             # fh is nonblocking, but we trust that the OS can accept these
-            # extra 3 octets anyway.
+            # few octets anyway.
             syswrite $fh, "hi #$_\n";
 
             # $fh is being closed here, as we don't store it anywhere
@@ -639,7 +757,7 @@ file handles, then fork, pass one more string, and run some code.
    sub Some::function {
       my ($fh, $str1, $str2, $fh1, $fh2, $str3) = @_;
 
-      print scalar <$fh>; # prints "hi 1\n" and "hi 2\n"
+      print scalar <$fh>; # prints "hi #1\n" and "hi #2\n" in any order
    }
 
 =cut
@@ -683,19 +801,18 @@ a new perl interpreter and compile the small server each time, I get:
 So how can C<< AnyEvent->new >> be faster than a standard fork, even
 though it uses the same operations, but adds a lot of overhead?
 
-The difference is simply the process size: forking the 6MB process takes
-so much longer than forking the 2.5MB template process that the overhead
-introduced is canceled out.
+The difference is simply the process size: forking the 5MB process takes
+so much longer than forking the 2.5MB template process that the extra
+overhead introduced is canceled out.
 
 If the benchmark process grows, the normal fork becomes even slower:
 
-   1340 new processes, manual fork in a 20MB process
-    731 new processes, manual fork in a 200MB process
-    235 new processes, manual fork in a 2000MB process
+   1340 new processes, manual fork of a 20MB process
+    731 new processes, manual fork of a 200MB process
+    235 new processes, manual fork of a 2000MB process
 
-What that means (to me) is that I can use this module without having a
-very bad conscience because of the extra overhead required to start new
-processes.
+What that means (to me) is that I can use this module without having a bad
+conscience because of the extra overhead required to start new processes.
 
 =head1 TYPICAL PROBLEMS
 
@@ -704,7 +821,7 @@ them, most can be avoided.
 
 =over 4
 
-=item "leaked" file descriptors for exec'ed processes
+=item leaked file descriptors for exec'ed processes
 
 POSIX systems inherit file descriptors by default when exec'ing a new
 process. While perl itself laudably sets the close-on-exec flags on new
@@ -734,7 +851,7 @@ libraries or the code that leaks those file descriptors.
 Fortunately, most of these leaked descriptors do no harm, other than
 sitting on some resources.
 
-=item "leaked" file descriptors for fork'ed processes
+=item leaked file descriptors for fork'ed processes
 
 Normally, L<AnyEvent::Fork> does start new processes by exec'ing them,
 which closes file descriptors not marked for being inherited.
@@ -753,10 +870,11 @@ The solution is to either not load these modules before use'ing
 L<AnyEvent::Fork::Early> or L<AnyEvent::Fork::Template>, or to delay
 initialising them, for example, by calling C<init Gtk2> manually.
 
-=item exit runs destructors
+=item exiting calls object destructors
 
-This only applies to users of Lc<AnyEvent::Fork:Early> and
-L<AnyEvent::Fork::Template>.
+This only applies to users of L<AnyEvent::Fork:Early> and
+L<AnyEvent::Fork::Template>, or when initialiasing code creates objects
+that reference external resources.
 
 When a process created by AnyEvent::Fork exits, it might do so by calling
 exit, or simply letting perl reach the end of the program. At which point
@@ -785,9 +903,8 @@ care about. The fork emulation is a bad joke - I have yet to see something
 useful that you can do with it without running into memory corruption
 issues or other braindamage. Hrrrr.
 
-Cygwin perl is not supported at the moment, as it should implement fd
-passing, but doesn't, and rolling my own is hard, as cygwin doesn't
-support enough functionality to do it.
+Cygwin perl is not supported at the moment due to some hilarious
+shortcomings of its API - see L<IO::FDPoll> for more details.
 
 =head1 SEE ALSO
 

@@ -19,6 +19,7 @@ sub error {
    last;
 }
 
+# the goal here is to keep this simple, small and efficient
 sub serve {
    undef &me; # free a tiny bit of memory
 
@@ -67,14 +68,18 @@ sub serve {
 
       } elsif ($cmd eq "e") {
          ($cmd, @_) = unpack "(w/a*)*", $buf;
+
+         # $cmd is allowed to access @_ and @arg, and nothing else
+         package main;
          eval $cmd;
-         error "$@" if $@;
+         AnyEvent::Fork::Serve::error "$@" if $@;
         
       } elsif ($cmd eq "r") {
          # we could free &serve etc., but this might just unshare
          # memory that could be shared otherwise.
          @_ = ($master, @arg);
          $0 = "$buf of $OWNER";
+         package main;
          goto &$buf;
 
       } else {
@@ -83,6 +88,7 @@ sub serve {
    }
 }
 
+# the entry point for new_exec
 sub me {
    #$^F = 2; # should always be the case
 
