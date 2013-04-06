@@ -72,12 +72,25 @@ preserving most of the advantages of fork.
 It can be used to create new worker processes or new independent
 subprocesses for short- and long-running jobs, process pools (e.g. for use
 in pre-forked servers) but also to spawn new external processes (such as
-CGI scripts from a webserver), which can be faster (and more well behaved)
+CGI scripts from a web server), which can be faster (and more well behaved)
 than using fork+exec in big processes.
 
 Special care has been taken to make this module useful from other modules,
 while still supporting specialised environments such as L<App::Staticperl>
 or L<PAR::Packer>.
+
+=head1 WHAT THIS MODULE IS NOT
+
+This module only creates processes and lets you pass file handles and
+strings to it, and run perl code. It does not implement any kind of RPC -
+there is no back channel from the process back to you, and there is no RPC
+or message passing going on.
+
+If you need some form of RPC, you can either implement it yourself
+in whatever way you like, use some message-passing module such
+as L<AnyEvent::MP>, some pipe such as L<AnyEvent::ZeroMQ>, use
+L<AnyEvent::Handle> on both sides to send e.g. JSON or Storable messages,
+and so on.
 
 =head1 PROBLEM STATEMENT
 
@@ -99,7 +112,7 @@ or fork+exec instead.
 =item Forking usually creates a copy-on-write copy of the parent
 process. Memory (for example, modules or data files that have been
 will not take additional memory). When exec'ing a new process, modules
-and data files might need to be loaded again, at extra cpu and memory
+and data files might need to be loaded again, at extra CPU and memory
 cost. Likewise when forking, all data structures are copied as well - if
 the program frees them and replaces them by new data, the child processes
 will retain the memory even if it isn't used.
@@ -121,12 +134,12 @@ interpreter. With a cooperative main program, exec'ing the interpreter
 might not even be necessary.
 
 =item Forking might be impossible when a program is running. For example,
-POSIX makes it almost impossible to fork from a multithreaded program and
+POSIX makes it almost impossible to fork from a multi-threaded program and
 do anything useful in the child - strictly speaking, if your perl program
 uses posix threads (even indirectly via e.g. L<IO::AIO> or L<threads>),
 you cannot call fork on the perl level anymore, at all.
 
-This module can safely fork helper processes at any time, by caling
+This module can safely fork helper processes at any time, by calling
 fork+exec in C, in a POSIX-compatible way.
 
 =item Parallel processing with fork might be inconvenient or difficult
@@ -168,7 +181,7 @@ for the perl interpreter with the new process, but loading modules takes
 time, and the memory is not shared with anything else.
 
 This is ideal for when you only need one extra process of a kind, with the
-option of starting and stipping it on demand.
+option of starting and stopping it on demand.
 
 Example:
 
@@ -193,7 +206,7 @@ consumes relatively little memory of its own.
 
 The disadvantage of this approach is that you need to create a template
 process for the sole purpose of forking new processes from it, but if you
-only need a fixed number of proceses you can create them, and then destroy
+only need a fixed number of processes you can create them, and then destroy
 the template process.
 
 Example:
@@ -240,14 +253,14 @@ package AnyEvent::Fork;
 
 use common::sense;
 
-use Socket ();
+use Errno ();
 
 use AnyEvent;
 use AnyEvent::Util ();
 
 use IO::FDPass;
 
-our $VERSION = 0.2;
+our $VERSION = 0.5;
 
 our $PERL; # the path to the perl interpreter, deduces with various forms of magic
 
@@ -270,47 +283,58 @@ our $TEMPLATE;
 sub _cmd {
    my $self = shift;
 
-   #TODO: maybe append the packet to any existing string command already in the queue
-
-   # ideally, we would want to use "a (w/a)*" as format string, but perl versions
-   # from at least 5.8.9 to 5.16.3 are all buggy and can't unpack it.
-   push @{ $self->[2] }, pack "N/a*", pack "(w/a*)*", @_;
+   # ideally, we would want to use "a (w/a)*" as format string, but perl
+   # versions from at least 5.8.9 to 5.16.3 are all buggy and can't unpack
+   # it.
+   push @{ $self->[2] }, pack "a L/a*", $_[0], $_[1];
 
    $self->[3] ||= AE::io $self->[1], 1, sub {
-      # send the next "thing" in the queue - either a reference to an fh,
-      # or a plain string.
+      do {
+         # send the next "thing" in the queue - either a reference to an fh,
+         # or a plain string.
 
-      if (ref $self->[2][0]) {
-         # send fh
-         IO::FDPass::send fileno $self->[1], fileno ${ $self->[2][0] }
-            and shift @{ $self->[2] };
+         if (ref $self->[2][0]) {
+            # send fh
+            unless (IO::FDPass::send fileno $self->[1], fileno ${ $self->[2][0] }) {
+               return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
+               undef $self->[3];
+               die "AnyEvent::Fork: file descriptor send failure: $!";
+            }
 
-      } else {
-         # send string
-         my $len = syswrite $self->[1], $self->[2][0]
-            or do { undef $self->[3]; die "AnyEvent::Fork: command write failure: $!" };
+            shift @{ $self->[2] };
 
-         substr $self->[2][0], 0, $len, "";
-         shift @{ $self->[2] } unless length $self->[2][0];
-      }
+         } else {
+            # send string
+            my $len = syswrite $self->[1], $self->[2][0];
 
-      unless (@{ $self->[2] }) {
-         undef $self->[3];
-         # invoke run callback
-         $self->[0]->($self->[1]) if $self->[0];
-      }
+            unless ($len) {
+               return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
+               undef $self->[3];
+               die "AnyEvent::Fork: command write failure: $!";
+            }
+
+            substr $self->[2][0], 0, $len, "";
+            shift @{ $self->[2] } unless length $self->[2][0];
+         }
+      } while @{ $self->[2] };
+
+      # everything written
+      undef $self->[3];
+
+      # invoke run callback, if any
+      $self->[4]->($self->[1]) if $self->[4];
    };
 
    () # make sure we don't leak the watcher
 }
 
 sub _new {
-   my ($self, $fh) = @_;
+   my ($self, $fh, $pid) = @_;
 
    AnyEvent::Util::fh_nonblocking $fh, 1;
 
    $self = bless [
-      undef, # run callback
+      $pid,
       $fh,
       [],    # write queue - strings or fd's
       undef, # AE watcher
@@ -331,13 +355,14 @@ sub _new_fork {
       $AnyEvent::Fork::Serve::OWNER = $parent;
       close $fh;
       $0 = "$_[1] of $parent";
+      $SIG{CHLD} = 'IGNORE';
       AnyEvent::Fork::Serve::serve ($slave);
       exit 0;
    } elsif (!$pid) {
       die "AnyEvent::Fork::Early/Template: unable to fork template process: $!";
    }
 
-   AnyEvent::Fork->_new ($fh)
+   AnyEvent::Fork->_new ($fh, $pid)
 }
 
 =item my $proc = new AnyEvent::Fork
@@ -398,7 +423,7 @@ reduces the amount of memory sharing that is possible, and is also slower.
 You should use C<new> whenever possible, except when having a template
 process around is unacceptable.
 
-The path to the perl interpreter is divined usign various methods - first
+The path to the perl interpreter is divined using various methods - first
 C<$^X> is investigated to see if the path ends with something that sounds
 as if it were the perl interpreter. Failing this, the module falls back to
 using C<$Config::Config{perlpath}>.
@@ -440,13 +465,31 @@ sub new_exec {
    my %env = %ENV;
    $env{PERL5LIB} = join +($^O eq "MSWin32" ? ";" : ":"), grep !ref, @INC;
 
-   Proc::FastSpawn::spawn (
+   my $pid = Proc::FastSpawn::spawn (
       $perl,
       ["perl", "-MAnyEvent::Fork::Serve", "-e", "AnyEvent::Fork::Serve::me", fileno $slave, $$],
       [map "$_=$env{$_}", keys %env],
    ) or die "unable to spawn AnyEvent::Fork server: $!";
 
-   $self->_new ($fh)
+   $self->_new ($fh, $pid)
+}
+
+=item $pid = $proc->pid
+
+Returns the process id of the process I<iff it is a direct child of the
+process> running AnyEvent::Fork, and C<undef> otherwise.
+
+Normally, only processes created via C<< AnyEvent::Fork->new_exec >> and
+L<AnyEvent::Fork::Template> are direct children, and you are responsible
+to clean up their zombies when they die.
+
+All other processes are not direct children, and will be cleaned up by
+AnyEvent::Fork.
+
+=cut
+
+sub pid {
+   $_[0][0]
 }
 
 =item $proc = $proc->eval ($perlcode, @args)
@@ -469,7 +512,7 @@ Returns the process object for easy chaining of method calls.
 sub eval {
    my ($self, $code, @args) = @_;
 
-   $self->_cmd (e => $code, @args);
+   $self->_cmd (e => pack "(w/a*)*", $code, @args);
 
    $self
 }
@@ -503,8 +546,8 @@ them to this method.
 
 Returns the process object for easy chaining of method calls.
 
-Example: pass an fh to a process, and release it without closing. it will
-be closed automatically when it is no longer used.
+Example: pass a file handle to a process, and release it without
+closing. It will be closed automatically when it is no longer used.
 
    $proc->send_fh ($my_fh);
    undef $my_fh; # free the reference if you want, but DO NOT CLOSE IT
@@ -527,14 +570,19 @@ sub send_fh {
 Send one or more argument strings to the process, to prepare a call to
 C<run>. The strings can be any octet string.
 
-Returns the process object for easy chaining of emthod calls.
+The protocol is optimised to pass a moderate number of relatively short
+strings - while you can pass up to 4GB of data in one go, this is more
+meant to pass some ID information or other startup info, not big chunks of
+data.
+
+Returns the process object for easy chaining of method calls.
 
 =cut
 
 sub send_arg {
    my ($self, @arg) = @_;
 
-   $self->_cmd (a => @arg);
+   $self->_cmd (a => pack "(w/a*)*", @arg);
 
    $self
 }
@@ -558,7 +606,7 @@ to save on kernel memory.
 
 The socket is non-blocking in the parent, and blocking in the newly
 created process. The close-on-exec flag is set on both. Even if not used
-otherwise, the socket can be a good indicator for the existance of the
+otherwise, the socket can be a good indicator for the existence of the
 process - if the other process exits, you get a readable event on it,
 because exiting the process closes the socket (if it didn't create any
 children using fork).
@@ -599,11 +647,55 @@ file handles, then fork, pass one more string, and run some code.
 sub run {
    my ($self, $func, $cb) = @_;
 
-   $self->[0] = $cb;
+   $self->[4] = $cb;
    $self->_cmd (r => $func);
 }
 
 =back
+
+=head1 PERFORMANCE
+
+Now for some unscientific benchmark numbers (all done on an amd64
+GNU/Linux box). These are intended to give you an idea of the relative
+performance you can expect, they are not meant to be absolute performance
+numbers.
+
+OK, so, I ran a simple benchmark that creates a socket pair, forks, calls
+exit in the child and waits for the socket to close in the parent. I did
+load AnyEvent, EV and AnyEvent::Fork, for a total process size of 5100kB.
+
+   2079 new processes per second, using manual socketpair + fork
+
+Then I did the same thing, but instead of calling fork, I called
+AnyEvent::Fork->new->run ("CORE::exit") and then again waited for the
+socket form the child to close on exit. This does the same thing as manual
+socket pair + fork, except that what is forked is the template process
+(2440kB), and the socket needs to be passed to the server at the other end
+of the socket first.
+
+   2307 new processes per second, using AnyEvent::Fork->new
+
+And finally, using C<new_exec> instead C<new>, using vforks+execs to exec
+a new perl interpreter and compile the small server each time, I get:
+
+    479 vfork+execs per second, using AnyEvent::Fork->new_exec
+
+So how can C<< AnyEvent->new >> be faster than a standard fork, even
+though it uses the same operations, but adds a lot of overhead?
+
+The difference is simply the process size: forking the 6MB process takes
+so much longer than forking the 2.5MB template process that the overhead
+introduced is canceled out.
+
+If the benchmark process grows, the normal fork becomes even slower:
+
+   1340 new processes, manual fork in a 20MB process
+    731 new processes, manual fork in a 200MB process
+    235 new processes, manual fork in a 2000MB process
+
+What that means (to me) is that I can use this module without having a
+very bad conscience because of the extra overhead required to start new
+processes.
 
 =head1 TYPICAL PROBLEMS
 
@@ -620,8 +712,8 @@ file handles, most C libraries don't care, and even if all cared, it's
 often not possible to set the flag in a race-free manner.
 
 That means some file descriptors can leak through. And since it isn't
-possible to know which file descriptors are "good" and "neccessary" (or
-even to know which file descreiptors are open), there is no good way to
+possible to know which file descriptors are "good" and "necessary" (or
+even to know which file descriptors are open), there is no good way to
 close the ones that might harm.
 
 As an example of what "harm" can be done consider a web server that
@@ -639,7 +731,7 @@ well before many random file descriptors are open.
 In general, the solution for these kind of problems is to fix the
 libraries or the code that leaks those file descriptors.
 
-Fortunately, most of these lekaed descriptors do no harm, other than
+Fortunately, most of these leaked descriptors do no harm, other than
 sitting on some resources.
 
 =item "leaked" file descriptors for fork'ed processes
@@ -661,6 +753,27 @@ The solution is to either not load these modules before use'ing
 L<AnyEvent::Fork::Early> or L<AnyEvent::Fork::Template>, or to delay
 initialising them, for example, by calling C<init Gtk2> manually.
 
+=item exit runs destructors
+
+This only applies to users of Lc<AnyEvent::Fork:Early> and
+L<AnyEvent::Fork::Template>.
+
+When a process created by AnyEvent::Fork exits, it might do so by calling
+exit, or simply letting perl reach the end of the program. At which point
+Perl runs all destructors.
+
+Not all destructors are fork-safe - for example, an object that represents
+the connection to an X display might tell the X server to free resources,
+which is inconvenient when the "real" object in the parent still needs to
+use them.
+
+This is obviously not a problem for L<AnyEvent::Fork::Early>, as you used
+it as the very first thing, right?
+
+It is a problem for L<AnyEvent::Fork::Template> though - and the solution
+is to not create objects with nontrivial destructors that might have an
+effect outside of Perl.
+
 =back
 
 =head1 PORTABILITY NOTES
@@ -669,7 +782,7 @@ Native win32 perls are somewhat supported (AnyEvent::Fork::Early is a nop,
 and ::Template is not going to work), and it cost a lot of blood and sweat
 to make it so, mostly due to the bloody broken perl that nobody seems to
 care about. The fork emulation is a bad joke - I have yet to see something
-useful that you cna do with it without running into memory corruption
+useful that you can do with it without running into memory corruption
 issues or other braindamage. Hrrrr.
 
 Cygwin perl is not supported at the moment, as it should implement fd

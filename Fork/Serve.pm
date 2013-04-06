@@ -6,16 +6,16 @@ use IO::FDPass;
 our $OWNER; # pid of process "owning" us
 
 # commands understood:
-# e eval perlcode strings...
-# f fork [fh]
-# h handle
-# a args strings...
-# r run func [args...]
+# e_val perlcode string...
+# f_ork
+# h_andle + fd
+# a_rgs string...
+# r_un func
 
 sub serve;
 
 sub error {
-   warn "$_[0]\n";
+   warn "[$0] ERROR: $_[0]\n";
    last;
 }
 
@@ -26,31 +26,30 @@ sub serve {
 
    my @arg;
 
+   my ($cmd, $fd);
+
    while () {
       # we must not ever read "too much" data, as we might accidentally read
-      # an fd_send request. maybe fd_recv should actually receive any amount of
-      # data and fds, but then we still don't know which fd corresponds to which request.
+      # an IO::FDPass::send request.
 
       my $len;
-      sysread $master, $len, 4 - length $len, length $len or return
-         while 4 > length $len;
-      $len = unpack "N", $len;
+      sysread $master, $len, 5 - length $len, length $len or return
+         while 5 > length $len;
+      ($cmd, $len) = unpack "a L", $len;
 
       my $buf;
       sysread $master, $buf, $len - length $buf, length $buf or return
          while $len > length $buf;
 
-      my ($cmd, @val) = unpack "(w/a)*", $buf;
-
-      #warn "cmd<$cmd,@val>\n";
+      #warn "cmd<$cmd,$buf>\n";
       if ($cmd eq "h") {
-         my $fd = IO::FDPass::recv fileno $master;
+         $fd = IO::FDPass::recv fileno $master;
          $fd >= 0 or error "AnyEvent::Fork::Serve: fd_recv() failed: $!";
          open my $fh, "+<&=$fd" or error "AnyEvent::Fork::Serve: open (fd_recv) failed: $!";
          push @arg, $fh;
 
       } elsif ($cmd eq "a") {
-         push @arg, @val;
+         push @arg, unpack "(w/a*)*", $buf;
 
       } elsif ($cmd eq "f") {
          my $pid = fork;
@@ -67,7 +66,7 @@ sub serve {
          }
 
       } elsif ($cmd eq "e") {
-         $cmd = shift @val;
+         ($cmd, @_) = unpack "(w/a*)*", $buf;
          eval $cmd;
          error "$@" if $@;
         
@@ -75,8 +74,8 @@ sub serve {
          # we could free &serve etc., but this might just unshare
          # memory that could be shared otherwise.
          @_ = ($master, @arg);
-         $0 = "$val[0] of $OWNER";
-         goto &{ $val[0] };
+         $0 = "$buf of $OWNER";
+         goto &$buf;
 
       } else {
          error "AnyEvent::Fork::Serve received unknown request '$cmd' - stream corrupted?";
@@ -93,6 +92,7 @@ sub me {
    $OWNER = $ARGV[1];
 
    $0 = "AnyEvent::Fork/exec of $OWNER";
+   $SIG{CHLD} = 'IGNORE';
 
    @ARGV = ();
    @_ = $fh;

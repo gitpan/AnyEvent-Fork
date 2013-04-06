@@ -1,5 +1,17 @@
 Revision history for Perl extension Proc::Pool
 
+TODO: expose pid somehow, maybe set child watcher?
+TODO: AnyEvent::Fork::RPC::Sync and Async or so.
+
+0.5   Sat Apr  6 05:30:03 CEST 2013
+	- set $SIG{CHLD} to IGNORE in processes forked to avoid
+          accumulating zombies.
+        - added "typical problems" section.
+        - add some unscientific benchmark numbers to indicate relative
+          performance.
+        - post-benchmark socket writing optimisations :) (fewer syscalls,
+          do more than one write per event loop iteration).
+
 0.2   Fri Apr  5 21:07:59 CEST 2013
 	- INCOMPATIBLE CHANGE: AnyEvent::Fork::Template no longer exports
           anything and has renamed the variable.

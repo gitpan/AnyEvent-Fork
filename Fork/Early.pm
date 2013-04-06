@@ -29,7 +29,7 @@ And anyway, forking would still be more efficient, if it were possible.
 And, as you hopefully guessed, this module makes this possible - it must
 be run by the main program (i.e. to cannot be used in a module), and as
 early as possible. How early? Well, early enough so that any other modules
-can still be laoded and used, that is, before modules such as AnyEvent or
+can still be loaded and used, that is, before modules such as AnyEvent or
 Gtk2 are being initialised.
 
 Upon C<use>'ing the module, the process is forked, and the resulting

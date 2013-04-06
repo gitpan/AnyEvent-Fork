@@ -32,9 +32,9 @@ variable (mnemonic: same name as the module itself).
 It must only be used in the main program, and only once. Other than that,
 the only requirement is that you can handle the results of a fork at that
 time, i.e., when you use this module after AnyEvent has been initialised,
-or use it after you opened osme window with Gtk2 or Tk for example then
-then you can't easily use these modules in the forked process. Chosing the
-place to use this module wisely is key.
+or use it after you opened some window with Gtk2 or Tk for example then
+then you can't easily use these modules in the forked process. Choosing
+the place to use this module wisely is key.
 
 There is never a need for this module - you can always create a new empty
 process and loading the modules you need into it.
