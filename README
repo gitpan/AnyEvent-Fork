@@ -32,10 +32,14 @@ DESCRIPTION
     - there is no back channel from the process back to you, and there is no
     RPC or message passing going on.
 
-    If you need some form of RPC, you can either implement it yourself in
-    whatever way you like, use some message-passing module such as
-    AnyEvent::MP, some pipe such as AnyEvent::ZeroMQ, use AnyEvent::Handle
-    on both sides to send e.g. JSON or Storable messages, and so on.
+    If you need some form of RPC, you could use the AnyEvent::Fork::RPC
+    companion module, which adds simple RPC/job queueing to a process
+    created by this module.
+
+    Or you can implement it yourself in whatever way you like, use some
+    message-passing module such as AnyEvent::MP, some pipe such as
+    AnyEvent::ZeroMQ, use AnyEvent::Handle on both sides to send e.g. JSON
+    or Storable messages, and so on.
 
   COMPARISON TO OTHER MODULES
     There is an abundance of modules on CPAN that do "something fork", such
@@ -204,7 +208,7 @@ EXAMPLES
        }
 
   use AnyEvent::Fork as a faster fork+exec
-    This runs "/bin/echo hi", with stdandard output redirected to /tmp/log
+    This runs "/bin/echo hi", with standard output redirected to /tmp/log
     and standard error redirected to the communications socket. It is
     usually faster than fork+exec, but still lets you prepare the
     environment.
@@ -234,6 +238,10 @@ EXAMPLES
 CONCEPTS
     This module can create new processes either by executing a new perl
     process, or by forking from an existing "template" process.
+
+    All these processes are called "child processes" (whether they are
+    direct children or not), while the process that manages them is called
+    the "parent process".
 
     Each such process comes with its own file handle that can be used to
     communicate with it (it's actually a socket - one end in the new
@@ -331,8 +339,7 @@ THE "AnyEvent::Fork" CLASS
     resist being destroyed, so there is no reason to store them unless you
     need them later - configure and forget works just fine.
 
-        my $proc = new AnyEvent::Fork
-
+    my $proc = new AnyEvent::Fork
         Create a new "empty" perl interpreter process and returns its
         process object for further manipulation.
 
@@ -340,8 +347,7 @@ THE "AnyEvent::Fork" CLASS
         around for this purpose. When it doesn't exist yet, it is created by
         a call to "new_exec" first and then stays around for future calls.
 
-        $new_proc = $proc->fork
-
+    $new_proc = $proc->fork
         Forks $proc, creating a new process, and returns the process object
         of the new process.
 
@@ -350,8 +356,7 @@ THE "AnyEvent::Fork" CLASS
         server, you might "send_fh" the listening socket into the template
         process, and then keep calling "fork" and "run".
 
-        my $proc = new_exec AnyEvent::Fork
-
+    my $proc = new_exec AnyEvent::Fork
         Create a new "empty" perl interpreter process and returns its
         process object for further manipulation.
 
@@ -368,8 +373,7 @@ THE "AnyEvent::Fork" CLASS
         that sounds as if it were the perl interpreter. Failing this, the
         module falls back to using $Config::Config{perlpath}.
 
-        $pid = $proc->pid
-
+    $pid = $proc->pid
         Returns the process id of the process *iff it is a direct child of
         the process running AnyEvent::Fork*, and "undef" otherwise.
 
@@ -380,9 +384,8 @@ THE "AnyEvent::Fork" CLASS
         All other processes are not direct children, and will be cleaned up
         by AnyEvent::Fork itself.
 
-        $proc = $proc->eval ($perlcode, @args)
-
-        Evaluates the given $perlcode as ... perl code, while setting @_ to
+    $proc = $proc->eval ($perlcode, @args)
+        Evaluates the given $perlcode as ... Perl code, while setting @_ to
         the strings specified by @args, in the "main" package.
 
         This call is meant to do any custom initialisation that might be
@@ -404,14 +407,12 @@ THE "AnyEvent::Fork" CLASS
 
         Returns the process object for easy chaining of method calls.
 
-        $proc = $proc->require ($module, ...)
-
+    $proc = $proc->require ($module, ...)
         Tries to load the given module(s) into the process
 
         Returns the process object for easy chaining of method calls.
 
-        $proc = $proc->send_fh ($handle, ...)
-
+    $proc = $proc->send_fh ($handle, ...)
         Send one or more file handles (*not* file descriptors) to the
         process, to prepare a call to "run".
 
@@ -430,8 +431,7 @@ THE "AnyEvent::Fork" CLASS
            $proc->send_fh ($my_fh);
            undef $my_fh; # free the reference if you want, but DO NOT CLOSE IT
 
-        $proc = $proc->send_arg ($string, ...)
-
+    $proc = $proc->send_arg ($string, ...)
         Send one or more argument strings to the process, to prepare a call
         to "run". The strings can be any octet strings.
 
@@ -442,8 +442,7 @@ THE "AnyEvent::Fork" CLASS
 
         Returns the process object for easy chaining of method calls.
 
-        $proc->run ($func, $cb->($fh))
-
+    $proc->run ($func, $cb->($fh))
         Enter the function specified by the function name in $func in the
         process. The function is called with the communication socket as
         first argument, followed by all file handles and string arguments
@@ -539,7 +538,7 @@ PERFORMANCE
 
     The difference is simply the process size: forking the 5MB process takes
     so much longer than forking the 2.5MB template process that the extra
-    overhead introduced is canceled out.
+    overhead is canceled out.
 
     If the benchmark process grows, the normal fork becomes even slower:
 
@@ -605,7 +604,7 @@ TYPICAL PROBLEMS
 
     exiting calls object destructors
         This only applies to users of AnyEvent::Fork:Early and
-        AnyEvent::Fork::Template, or when initialiasing code creates objects
+        AnyEvent::Fork::Template, or when initialising code creates objects
         that reference external resources.
 
         When a process created by AnyEvent::Fork exits, it might do so by
@@ -636,19 +635,15 @@ PORTABILITY NOTES
     shortcomings of its API - see IO::FDPoll for more details.
 
 SEE ALSO
-    AnyEvent::Fork::Early (to avoid executing a perl interpreter),
-    AnyEvent::Fork::Template (to create a process by forking the main
-    program at a convenient time).
+    AnyEvent::Fork::Early, to avoid executing a perl interpreter at all
+    (part of this distribution).
 
-AUTHOR
+    AnyEvent::Fork::Template, to create a process by forking the main
+    program at a convenient time (part of this distribution).
+
+    AnyEvent::Fork::RPC, for simple RPC to child processes (on CPAN).
+
+AUTHOR AND CONTACT INFORMATION
      Marc Lehmann <schmorp@schmorp.de>
-     http://home.schmorp.de/
-
-POD ERRORS
-    Hey! The above document had some coding errors, which are explained
-    below:
-
-    Around line 360:
-        You can't have =items (as at line 476) unless the first thing after
-        the =over is an =item
+     http://software.schmorp.de/pkg/AnyEvent-Fork
 

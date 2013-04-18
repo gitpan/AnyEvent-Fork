@@ -1,7 +1,13 @@
-Revision history for Perl extension Proc::Pool
+Revision history for Perl extension AnyEvent::Fork
 
 TODO: maybe set child watcher?
-TODO: AnyEvent::Fork::RPC::Sync and Async or so.
+TODO: AnyEvent::Fork::Pool
+
+0.7  Thu Apr 18 22:16:26 CEST 2013
+	- only set SIGCHLD to IGNORE while serving requests, reset
+          it to the previous value after ->run.
+        - minor docpatches.
+        - mention AnyEvent::Fork::RPC, but not yte AnyEvent::Fork::Pool.
 
 0.6  Sun Apr  7 00:41:30 CEST 2013
 	- this release mostly updates the documentation.

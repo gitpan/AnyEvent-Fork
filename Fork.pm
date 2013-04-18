@@ -36,11 +36,14 @@ strings to it, and run perl code. It does not implement any kind of RPC -
 there is no back channel from the process back to you, and there is no RPC
 or message passing going on.
 
-If you need some form of RPC, you can either implement it yourself
-in whatever way you like, use some message-passing module such
-as L<AnyEvent::MP>, some pipe such as L<AnyEvent::ZeroMQ>, use
-L<AnyEvent::Handle> on both sides to send e.g. JSON or Storable messages,
-and so on.
+If you need some form of RPC, you could use the L<AnyEvent::Fork::RPC>
+companion module, which adds simple RPC/job queueing to a process created
+by this module.
+
+Or you can implement it yourself in whatever way you like, use some
+message-passing module such as L<AnyEvent::MP>, some pipe such as
+L<AnyEvent::ZeroMQ>, use L<AnyEvent::Handle> on both sides to send
+e.g. JSON or Storable messages, and so on.
 
 =head2 COMPARISON TO OTHER MODULES
 
@@ -223,7 +226,7 @@ C<My::Server> might look like this:
 
 =head2 use AnyEvent::Fork as a faster fork+exec
 
-This runs C</bin/echo hi>, with stdandard output redirected to /tmp/log
+This runs C</bin/echo hi>, with standard output redirected to F</tmp/log>
 and standard error redirected to the communications socket. It is usually
 faster than fork+exec, but still lets you prepare the environment.
 
@@ -253,6 +256,10 @@ faster than fork+exec, but still lets you prepare the environment.
 
 This module can create new processes either by executing a new perl
 process, or by forking from an existing "template" process.
+
+All these processes are called "child processes" (whether they are direct
+children or not), while the process that manages them is called the
+"parent process".
 
 Each such process comes with its own file handle that can be used to
 communicate with it (it's actually a socket - one end in the new process,
@@ -372,15 +379,7 @@ use AnyEvent::Util ();
 
 use IO::FDPass;
 
-our $VERSION = 0.6;
-
-our $PERL; # the path to the perl interpreter, deduces with various forms of magic
-
-=over 4
-
-=back
-
-=cut
+our $VERSION = 0.7;
 
 # the early fork template process
 our $EARLY;
@@ -388,53 +387,11 @@ our $EARLY;
 # the empty template process
 our $TEMPLATE;
 
-sub _cmd {
-   my $self = shift;
-
-   # ideally, we would want to use "a (w/a)*" as format string, but perl
-   # versions from at least 5.8.9 to 5.16.3 are all buggy and can't unpack
-   # it.
-   push @{ $self->[2] }, pack "a L/a*", $_[0], $_[1];
-
-   $self->[3] ||= AE::io $self->[1], 1, sub {
-      do {
-         # send the next "thing" in the queue - either a reference to an fh,
-         # or a plain string.
-
-         if (ref $self->[2][0]) {
-            # send fh
-            unless (IO::FDPass::send fileno $self->[1], fileno ${ $self->[2][0] }) {
-               return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
-               undef $self->[3];
-               die "AnyEvent::Fork: file descriptor send failure: $!";
-            }
-
-            shift @{ $self->[2] };
-
-         } else {
-            # send string
-            my $len = syswrite $self->[1], $self->[2][0];
-
-            unless ($len) {
-               return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
-               undef $self->[3];
-               die "AnyEvent::Fork: command write failure: $!";
-            }
-
-            substr $self->[2][0], 0, $len, "";
-            shift @{ $self->[2] } unless length $self->[2][0];
-         }
-      } while @{ $self->[2] };
-
-      # everything written
-      undef $self->[3];
-
-      # invoke run callback, if any
-      $self->[4]->($self->[1]) if $self->[4];
-   };
-
-   () # make sure we don't leak the watcher
-}
+sub QUEUE() { 0 }
+sub FH()    { 1 }
+sub WW()    { 2 }
+sub PID()   { 3 }
+sub CB()    { 4 }
 
 sub _new {
    my ($self, $fh, $pid) = @_;
@@ -442,13 +399,61 @@ sub _new {
    AnyEvent::Util::fh_nonblocking $fh, 1;
 
    $self = bless [
-      $pid,
-      $fh,
       [],    # write queue - strings or fd's
+      $fh,
       undef, # AE watcher
+      $pid,
    ], $self;
 
    $self
+}
+
+sub _cmd {
+   my $self = shift;
+
+   # ideally, we would want to use "a (w/a)*" as format string, but perl
+   # versions from at least 5.8.9 to 5.16.3 are all buggy and can't unpack
+   # it.
+   push @{ $self->[QUEUE] }, pack "a L/a*", $_[0], $_[1];
+
+   $self->[WW] ||= AE::io $self->[FH], 1, sub {
+      do {
+         # send the next "thing" in the queue - either a reference to an fh,
+         # or a plain string.
+
+         if (ref $self->[QUEUE][0]) {
+            # send fh
+            unless (IO::FDPass::send fileno $self->[FH], fileno ${ $self->[QUEUE][0] }) {
+               return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
+               undef $self->[WW];
+               die "AnyEvent::Fork: file descriptor send failure: $!";
+            }
+
+            shift @{ $self->[QUEUE] };
+
+         } else {
+            # send string
+            my $len = syswrite $self->[FH], $self->[QUEUE][0];
+
+            unless ($len) {
+               return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
+               undef $self->[3];
+               die "AnyEvent::Fork: command write failure: $!";
+            }
+
+            substr $self->[QUEUE][0], 0, $len, "";
+            shift @{ $self->[QUEUE] } unless length $self->[QUEUE][0];
+         }
+      } while @{ $self->[QUEUE] };
+
+      # everything written
+      undef $self->[WW];
+
+      # invoke run callback, if any
+      $self->[CB]->($self->[FH]) if $self->[CB];
+   };
+
+   () # make sure we don't leak the watcher
 }
 
 # fork template from current process, used by AnyEvent::Fork::Early/Template
@@ -463,7 +468,6 @@ sub _new_fork {
       $AnyEvent::Fork::Serve::OWNER = $parent;
       close $fh;
       $0 = "$_[1] of $parent";
-      $SIG{CHLD} = 'IGNORE';
       AnyEvent::Fork::Serve::serve ($slave);
       exit 0;
    } elsif (!$pid) {
@@ -592,12 +596,12 @@ AnyEvent::Fork itself.
 =cut
 
 sub pid {
-   $_[0][0]
+   $_[0][PID]
 }
 
 =item $proc = $proc->eval ($perlcode, @args)
 
-Evaluates the given C<$perlcode> as ... perl code, while setting C<@_> to
+Evaluates the given C<$perlcode> as ... Perl code, while setting C<@_> to
 the strings specified by C<@args>, in the "main" package.
 
 This call is meant to do any custom initialisation that might be required
@@ -669,7 +673,7 @@ sub send_fh {
 
    for my $fh (@fh) {
       $self->_cmd ("h");
-      push @{ $self->[2] }, \$fh;
+      push @{ $self->[QUEUE] }, \$fh;
    }
 
    $self
@@ -765,7 +769,7 @@ file handles, then fork, pass one more string, and run some code.
 sub run {
    my ($self, $func, $cb) = @_;
 
-   $self->[4] = $cb;
+   $self->[CB] = $cb;
    $self->_cmd (r => $func);
 }
 
@@ -803,7 +807,7 @@ though it uses the same operations, but adds a lot of overhead?
 
 The difference is simply the process size: forking the 5MB process takes
 so much longer than forking the 2.5MB template process that the extra
-overhead introduced is canceled out.
+overhead is canceled out.
 
 If the benchmark process grows, the normal fork becomes even slower:
 
@@ -873,7 +877,7 @@ initialising them, for example, by calling C<init Gtk2> manually.
 =item exiting calls object destructors
 
 This only applies to users of L<AnyEvent::Fork:Early> and
-L<AnyEvent::Fork::Template>, or when initialiasing code creates objects
+L<AnyEvent::Fork::Template>, or when initialising code creates objects
 that reference external resources.
 
 When a process created by AnyEvent::Fork exits, it might do so by calling
@@ -908,14 +912,18 @@ shortcomings of its API - see L<IO::FDPoll> for more details.
 
 =head1 SEE ALSO
 
-L<AnyEvent::Fork::Early> (to avoid executing a perl interpreter),
-L<AnyEvent::Fork::Template> (to create a process by forking the main
-program at a convenient time).
+L<AnyEvent::Fork::Early>, to avoid executing a perl interpreter at all
+(part of this distribution).
 
-=head1 AUTHOR
+L<AnyEvent::Fork::Template>, to create a process by forking the main
+program at a convenient time (part of this distribution).
+
+L<AnyEvent::Fork::RPC>, for simple RPC to child processes (on CPAN).
+
+=head1 AUTHOR AND CONTACT INFORMATION
 
  Marc Lehmann <schmorp@schmorp.de>
- http://home.schmorp.de/
+ http://software.schmorp.de/pkg/AnyEvent-Fork
 
 =cut
 

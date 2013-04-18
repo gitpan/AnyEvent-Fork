@@ -29,6 +29,8 @@ sub serve {
 
    my ($cmd, $fd);
 
+   local $SIG{CHLD} = 'IGNORE';
+
    while () {
       # we must not ever read "too much" data, as we might accidentally read
       # an IO::FDPass::send request.
@@ -98,7 +100,6 @@ sub me {
    $OWNER = $ARGV[1];
 
    $0 = "AnyEvent::Fork/exec of $OWNER";
-   $SIG{CHLD} = 'IGNORE';
 
    @ARGV = ();
    @_ = $fh;
