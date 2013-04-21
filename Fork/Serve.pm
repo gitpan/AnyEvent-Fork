@@ -60,7 +60,7 @@ sub serve {
          if ($pid eq 0) {
             $0 = "AnyEvent::Fork of $OWNER";
             @_ = pop @arg;
-            goto &serve;
+            goto &serve; #closes $master
          } else {
             @arg = ();
 
@@ -88,6 +88,9 @@ sub serve {
          error "AnyEvent::Fork::Serve received unknown request '$cmd' - stream corrupted?";
       }
    }
+
+   shutdown $master, 1;
+   exit; # work around broken win32 perls
 }
 
 # the entry point for new_exec

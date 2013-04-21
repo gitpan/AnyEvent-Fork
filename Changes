@@ -1,7 +1,16 @@
 Revision history for Perl extension AnyEvent::Fork
 
 TODO: maybe set child watcher?
-TODO: AnyEvent::Fork::Pool
+TODO: alow one to ovveride $PERL path
+
+1.0  Sun Apr 21 14:05:33 CEST 2013
+	- implement new_from_fh and to_fh, for easy passing of
+          fork objects among processes (EXPERIMENTAL!).
+        - sabotage the fork object on run or to_fh.
+        - expliticly call exit in child server - not elegant, but
+          doesn't disturb any sane perl, and helps broken win32 perls
+          to clean up.
+        - the write watcher wasn't disabled on write errors.
 
 0.7  Thu Apr 18 22:16:26 CEST 2013
 	- only set SIGCHLD to IGNORE while serving requests, reset

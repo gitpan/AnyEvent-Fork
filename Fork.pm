@@ -40,7 +40,11 @@ If you need some form of RPC, you could use the L<AnyEvent::Fork::RPC>
 companion module, which adds simple RPC/job queueing to a process created
 by this module.
 
-Or you can implement it yourself in whatever way you like, use some
+And if you need some automatic process pool management on top of
+L<AnyEvent::Fork::RPC>, you can look at the L<AnyEvent::Fork::Pool>
+companion module.
+
+Or you can implement it yourself in whatever way you like: use some
 message-passing module such as L<AnyEvent::MP>, some pipe such as
 L<AnyEvent::ZeroMQ>, use L<AnyEvent::Handle> on both sides to send
 e.g. JSON or Storable messages, and so on.
@@ -252,7 +256,76 @@ faster than fork+exec, but still lets you prepare the environment.
 
    my $stderr = $cv->recv;
 
-=head1 CONCEPTS
+=head2 For stingy users: put the worker code into a C<DATA> section.
+
+When you want to be stingy with files, you cna put your code into the
+C<DATA> section of your module (or program):
+
+   use AnyEvent::Fork;
+
+   AnyEvent::Fork
+      ->new
+      ->eval (do { local $/; <DATA> })
+      ->run ("doit", sub { ... });
+
+   __DATA__
+
+   sub doit {
+      ... do something!
+   }
+
+=head2 For stingy standalone programs: do not rely on external files at
+all.
+
+For single-file scripts it can be inconvenient to rely on external
+files - even when using < C<DATA> section, you still need to C<exec>
+an external perl interpreter, which might not be available when using
+L<App::Staticperl>, L<Urlader> or L<PAR::Packer> for example.
+
+Two modules help here - L<AnyEvent::Fork::Early> forks a template process
+for all further calls to C<new_exec>, and L<AnyEvent::Fork::Template>
+forks the main program as a template process.
+
+Here is how your main program should look like:
+
+   #! perl
+
+   # optional, as the very first thing.
+   # in case modules want to create their own processes.
+   use AnyEvent::Fork::Early;
+
+   # next, load all modules you need in your template process
+   use Example::My::Module
+   use Example::Whatever;
+
+   # next, put your run function definition and anything else you
+   # need, but do not use code outside of BEGIN blocks.
+   sub worker_run {
+      my ($fh, @args) = @_;
+      ...
+   }
+
+   # now preserve everything so far as AnyEvent::Fork object
+   # in §TEMPLATE.
+   use AnyEvent::Fork::Template;
+
+   # do not put code outside of BEGIN blocks until here
+
+   # now use the $TEMPLATE process in any way you like
+
+   # for example: create 10 worker processes
+   my @worker;
+   my $cv = AE::cv;
+   for (1..10) {
+      $cv->begin;
+      $TEMPLATE->fork->send_arg ($_)->run ("worker_run", sub {
+         push @worker, shift;
+         $cv->end;
+      });
+   }
+   $cv->recv;
+
+lhead1 CONCEPTS
 
 This module can create new processes either by executing a new perl
 process, or by forking from an existing "template" process.
@@ -379,7 +452,7 @@ use AnyEvent::Util ();
 
 use IO::FDPass;
 
-our $VERSION = 0.7;
+our $VERSION = '1.0';
 
 # the early fork template process
 our $EARLY;
@@ -437,7 +510,7 @@ sub _cmd {
 
             unless ($len) {
                return if $! == Errno::EAGAIN || $! == Errno::EWOULDBLOCK;
-               undef $self->[3];
+               undef $self->[WW];
                die "AnyEvent::Fork: command write failure: $!";
             }
 
@@ -450,7 +523,10 @@ sub _cmd {
       undef $self->[WW];
 
       # invoke run callback, if any
-      $self->[CB]->($self->[FH]) if $self->[CB];
+      if ($self->[CB]) {
+         $self->[CB]->($self->[FH]);
+         @$self = ();
+      }
    };
 
    () # make sure we don't leak the watcher
@@ -773,6 +849,50 @@ sub run {
    $self->_cmd (r => $func);
 }
 
+=item $proc->to_fh ($cb->($fh))    # EXPERIMENTAL, MIGHT BE REMOVED
+
+Flushes all commands out to the process and then calls the callback with
+the communications socket.
+
+The process object becomes unusable on return from this function - any
+further method calls result in undefined behaviour.
+
+The point of this method is to give you a file handle thta you cna pass
+to another process. In that other process, you can call C<new_from_fh
+AnyEvent::Fork> to create a new C<AnyEvent::Fork> object from it, thereby
+effectively passing a fork object to another process.
+
+=cut
+
+sub to_fh {
+   my ($self, $cb) = @_;
+
+   $self->[CB] = $cb;
+
+   unless ($self->[WW]) {
+      $self->[CB]->($self->[FH]);
+      @$self = ();
+   }
+}
+
+=item new_from_fh AnyEvent::Fork $fh    # EXPERIMENTAL, MIGHT BE REMOVED
+
+Takes a file handle originally rceeived by the C<to_fh> method and creates
+a new C<AnyEvent:Fork> object. The child process itself will not change in
+any way, i.e. it will keep all the modifications done to it before calling
+C<to_fh>.
+
+The new object is very much like the original object, except that the
+C<pid> method will return C<undef> even if the process is a direct child.
+
+=cut
+
+sub new_from_fh {
+   my ($class, $fh) = @_;
+
+   $class->_new ($fh)
+}
+
 =back
 
 =head1 PERFORMANCE
@@ -790,7 +910,7 @@ load AnyEvent, EV and AnyEvent::Fork, for a total process size of 5100kB.
 
 Then I did the same thing, but instead of calling fork, I called
 AnyEvent::Fork->new->run ("CORE::exit") and then again waited for the
-socket form the child to close on exit. This does the same thing as manual
+socket from the child to close on exit. This does the same thing as manual
 socket pair + fork, except that what is forked is the template process
 (2440kB), and the socket needs to be passed to the server at the other end
 of the socket first.
@@ -907,8 +1027,15 @@ care about. The fork emulation is a bad joke - I have yet to see something
 useful that you can do with it without running into memory corruption
 issues or other braindamage. Hrrrr.
 
+Since fork is endlessly broken on win32 perls (it doesn't even remotely
+work within it's documented limits) and quite obviously it's not getting
+improved any time soon, the best way to proceed on windows would be to
+always use C<new_exec> and thus never rely on perl's fork "emulation".
+
 Cygwin perl is not supported at the moment due to some hilarious
-shortcomings of its API - see L<IO::FDPoll> for more details.
+shortcomings of its API - see L<IO::FDPoll> for more details. If you never
+use C<send_fh> and always use C<new_exec> to create processes, it should
+work though.
 
 =head1 SEE ALSO
 
@@ -919,6 +1046,8 @@ L<AnyEvent::Fork::Template>, to create a process by forking the main
 program at a convenient time (part of this distribution).
 
 L<AnyEvent::Fork::RPC>, for simple RPC to child processes (on CPAN).
+
+L<AnyEvent::Fork::Pool>, for simple worker process pool (on CPAN).
 
 =head1 AUTHOR AND CONTACT INFORMATION
 
