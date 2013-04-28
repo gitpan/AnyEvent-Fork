@@ -1,7 +1,13 @@
 Revision history for Perl extension AnyEvent::Fork
 
 TODO: maybe set child watcher?
-TODO: alow one to ovveride $PERL path
+
+1.1  Sun Apr 28 15:47:38 CEST 2013
+	- (hopefully) remove dependency on common::sense in child code.
+        - make dependency on IO::FDPass dynamic in child code.
+        - actually open "communications socket" for reading AND writing
+          in the child (this does not normally bother syswrite).
+	- allow perl path overriding in new_exec.
 
 1.0  Sun Apr 21 14:05:33 CEST 2013
 	- implement new_from_fh and to_fh, for easy passing of

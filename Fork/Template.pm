@@ -23,8 +23,6 @@ AnyEvent::Fork::Template - generate a template process from the main program
 
 =head1 DESCRIPTION
 
-=head1 EXPORTS
-
 By default, this module forks when it is used the first time and stores
 the resulting L<AnyEvent::Fork> object in the C<$AnyEvent::Fork::Template>
 variable (mnemonic: same name as the module itself).

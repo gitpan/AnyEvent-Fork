@@ -325,7 +325,7 @@ Here is how your main program should look like:
    }
    $cv->recv;
 
-lhead1 CONCEPTS
+=head1 CONCEPTS
 
 This module can create new processes either by executing a new perl
 process, or by forking from an existing "template" process.
@@ -452,7 +452,7 @@ use AnyEvent::Util ();
 
 use IO::FDPass;
 
-our $VERSION = '1.0';
+our $VERSION = 1.1;
 
 # the early fork template process
 our $EARLY;
@@ -611,7 +611,13 @@ C<$^X> is investigated to see if the path ends with something that sounds
 as if it were the perl interpreter. Failing this, the module falls back to
 using C<$Config::Config{perlpath}>.
 
+The path to perl can also be overriden by setting the global variable
+C<$AnyEvent::Fork::PERL> - it's value will be used for all subsequent
+invocations.
+
 =cut
+
+our $PERL;
 
 sub new_exec {
    my ($self) = @_;
@@ -619,19 +625,23 @@ sub new_exec {
    return $EARLY->fork
       if $EARLY;
 
-   # first find path of perl
-   my $perl = $;
+   unless (defined $PERL) {
+      # first find path of perl
+      my $perl = $;
 
-   # first we try $^X, but the path must be absolute (always on win32), and end in sth.
-   # that looks like perl. this obviously only works for posix and win32
-   unless (
-      ($^O eq "MSWin32" || $perl =~ m%^/%)
-      && $perl =~ m%[/\\]perl(?:[0-9]+(\.[0-9]+)+)?(\.exe)?$%i
-   ) {
-      # if it doesn't look perlish enough, try Config
-      require Config;
-      $perl = $Config::Config{perlpath};
-      $perl =~ s/(?:\Q$Config::Config{_exe}\E)?$/$Config::Config{_exe}/;
+      # first we try $^X, but the path must be absolute (always on win32), and end in sth.
+      # that looks like perl. this obviously only works for posix and win32
+      unless (
+         ($^O eq "MSWin32" || $perl =~ m%^/%)
+         && $perl =~ m%[/\\]perl(?:[0-9]+(\.[0-9]+)+)?(\.exe)?$%i
+      ) {
+         # if it doesn't look perlish enough, try Config
+         require Config;
+         $perl = $Config::Config{perlpath};
+         $perl =~ s/(?:\Q$Config::Config{_exe}\E)?$/$Config::Config{_exe}/;
+      }
+
+      $PERL = $perl;
    }
 
    require Proc::FastSpawn;
@@ -649,7 +659,7 @@ sub new_exec {
    $env{PERL5LIB} = join +($^O eq "MSWin32" ? ";" : ":"), grep !ref, @INC;
 
    my $pid = Proc::FastSpawn::spawn (
-      $perl,
+      $PERL,
       ["perl", "-MAnyEvent::Fork::Serve", "-e", "AnyEvent::Fork::Serve::me", fileno $slave, $$],
       [map "$_=$env{$_}", keys %env],
    ) or die "unable to spawn AnyEvent::Fork server: $!";
@@ -848,6 +858,14 @@ sub run {
    $self->[CB] = $cb;
    $self->_cmd (r => $func);
 }
+
+=back
+
+=head2 EXPERIMENTAL METHODS
+
+These methods might go away completely or change behaviour, at any time.
+
+=over 4
 
 =item $proc->to_fh ($cb->($fh))    # EXPERIMENTAL, MIGHT BE REMOVED
 

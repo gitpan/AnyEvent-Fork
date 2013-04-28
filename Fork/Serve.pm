@@ -1,8 +1,5 @@
 package AnyEvent::Fork::Serve;
 
-use common::sense; # actually required to avoid spurious warnings...
-use IO::FDPass;
-
 our $OWNER; # pid of process "owning" us
 
 # commands understood:
@@ -12,15 +9,10 @@ our $OWNER; # pid of process "owning" us
 # a_rgs string...
 # r_un func
 
-sub serve;
-
-sub error {
-   warn "[$0] ERROR: $_[0]\n";
-   last;
-}
-
 # the goal here is to keep this simple, small and efficient
 sub serve {
+   local $^W = 0; # avoid spurious warnings
+
    undef &me; # free a tiny bit of memory
 
    my $master = shift;
@@ -30,6 +22,11 @@ sub serve {
    my ($cmd, $fd);
 
    local $SIG{CHLD} = 'IGNORE';
+
+   my $error = sub {
+      warn "[$0] ERROR: $_[0]\n";
+      last;
+   };
 
    while () {
       # we must not ever read "too much" data, as we might accidentally read
@@ -44,11 +41,11 @@ sub serve {
       sysread $master, $buf, $len - length $buf, length $buf or return
          while $len > length $buf;
 
-      #warn "cmd<$cmd,$buf>\n";
       if ($cmd eq "h") {
-         $fd = IO::FDPass::recv fileno $master;
-         $fd >= 0 or error "AnyEvent::Fork::Serve: fd_recv() failed: $!";
-         open my $fh, "+<&=$fd" or error "AnyEvent::Fork::Serve: open (fd_recv) failed: $!";
+         require IO::FDPass;
+         $fd = IO::FDPass::recv (fileno $master);
+         $fd >= 0 or $error->("AnyEvent::Fork::Serve: fd_recv() failed: $!");
+         open my $fh, "+<&=$fd" or $error->("AnyEvent::Fork::Serve: open (fd_recv) failed: $!");
          push @arg, $fh;
 
       } elsif ($cmd eq "a") {
@@ -65,7 +62,7 @@ sub serve {
             @arg = ();
 
             $pid
-               or error "AnyEvent::Fork::Serve: fork() failed: $!";
+               or $error->("AnyEvent::Fork::Serve: fork() failed: $!");
          }
 
       } elsif ($cmd eq "e") {
@@ -74,7 +71,7 @@ sub serve {
          # $cmd is allowed to access @_ and @arg, and nothing else
          package main;
          eval $cmd;
-         AnyEvent::Fork::Serve::error "$@" if $@;
+         $error->("$@") if $@;
         
       } elsif ($cmd eq "r") {
          # we could free &serve etc., but this might just unshare
@@ -85,7 +82,7 @@ sub serve {
          goto &$buf;
 
       } else {
-         error "AnyEvent::Fork::Serve received unknown request '$cmd' - stream corrupted?";
+         $error->("AnyEvent::Fork::Serve received unknown request '$cmd' - stream corrupted?");
       }
    }
 
@@ -97,7 +94,7 @@ sub serve {
 sub me {
    #$^F = 2; # should always be the case
 
-   open my $fh, "<&=$ARGV[0]"
+   open my $fh, "+<&=$ARGV[0]"
       or die "AnyEvent::Fork::Serve::me unable to open communication socket: $!\n";
 
    $OWNER = $ARGV[1];

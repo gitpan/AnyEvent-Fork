@@ -306,8 +306,7 @@ all.
        }
        $cv->recv;
 
-    lhead1 CONCEPTS
-
+CONCEPTS
     This module can create new processes either by executing a new perl
     process, or by forking from an existing "template" process.
 
@@ -445,6 +444,10 @@ THE "AnyEvent::Fork" CLASS
         that sounds as if it were the perl interpreter. Failing this, the
         module falls back to using $Config::Config{perlpath}.
 
+        The path to perl can also be overriden by setting the global
+        variable $AnyEvent::Fork::PERL - it's value will be used for all
+        subsequent invocations.
+
     $pid = $proc->pid
         Returns the process id of the process *iff it is a direct child of
         the process running AnyEvent::Fork*, and "undef" otherwise.
@@ -577,6 +580,9 @@ THE "AnyEvent::Fork" CLASS
 
               print scalar <$fh>; # prints "hi #1\n" and "hi #2\n" in any order
            }
+
+  EXPERIMENTAL METHODS
+    These methods might go away completely or change behaviour, at any time.
 
     $proc->to_fh ($cb->($fh)) # EXPERIMENTAL, MIGHT BE REMOVED
         Flushes all commands out to the process and then calls the callback
