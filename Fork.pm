@@ -452,7 +452,7 @@ use AnyEvent::Util ();
 
 use IO::FDPass;
 
-our $VERSION = 1.1;
+our $VERSION = 1.2;
 
 # the early fork template process
 our $EARLY;
@@ -607,7 +607,7 @@ You should use C<new> whenever possible, except when having a template
 process around is unacceptable.
 
 The path to the perl interpreter is divined using various methods - first
-C<$^X> is investigated to see if the path ends with something that sounds
+C<$^X> is investigated to see if the path ends with something that looks
 as if it were the perl interpreter. Failing this, the module falls back to
 using C<$Config::Config{perlpath}>.
 
@@ -670,14 +670,15 @@ sub new_exec {
 =item $pid = $proc->pid
 
 Returns the process id of the process I<iff it is a direct child of the
-process running AnyEvent::Fork>, and C<undef> otherwise.
+process running AnyEvent::Fork>, and C<undef> otherwise. As a general
+rule (that you cannot rely upon), processes created via C<new_exec>,
+L<AnyEvent::Fork::Early> or L<AnyEvent::Fork::Template> are direct
+children, while all other processes are not.
 
-Normally, only processes created via C<< AnyEvent::Fork->new_exec >> and
-L<AnyEvent::Fork::Template> are direct children, and you are responsible
-to clean up their zombies when they die.
-
-All other processes are not direct children, and will be cleaned up by
-AnyEvent::Fork itself.
+Or in other words, you do not normally have to take care of zombies for
+processes created via C<new>, but when in doubt, or zombies are a problem,
+you need to check whether a process is a diretc child by calling this
+method, and possibly creating a child watcher or reap it manually.
 
 =cut
 
@@ -819,6 +820,32 @@ existence of the process - if the other process exits, you get a readable
 event on it, because exiting the process closes the socket (if it didn't
 create any children using fork).
 
+=over 4
+
+=item Compatibility to L<AnyEvent::Fork::Remote>
+
+If you want to write code that works with both this module and
+L<AnyEvent::Fork::Remote>, you need to write your code so that it assumes
+there are two file handles for communications, which might not be unix
+domain sockets. The C<run> function should start like this:
+
+   sub run {
+      my ($rfh, @args) = @_; # @args is your normal arguments
+      my $wfh = fileno $rfh ? $rfh : *STDOUT;
+
+      # now use $rfh for reading and $wfh for writing
+   }
+
+This checks whether the passed file handle is, in fact, the process
+C<STDIN> handle. If it is, then the function was invoked visa
+L<AnyEvent::Fork::Remote>, so STDIN should be used for reading and
+C<STDOUT> should be used for writing.
+
+In all other cases, the function was called via this module, and there is
+only one file handle that should be sued for reading and writing.
+
+=back
+
 Example: create a template for a process pool, pass a few strings, some
 file handles, then fork, pass one more string, and run some code.
 
@@ -875,10 +902,10 @@ the communications socket.
 The process object becomes unusable on return from this function - any
 further method calls result in undefined behaviour.
 
-The point of this method is to give you a file handle thta you cna pass
+The point of this method is to give you a file handle that you can pass
 to another process. In that other process, you can call C<new_from_fh
-AnyEvent::Fork> to create a new C<AnyEvent::Fork> object from it, thereby
-effectively passing a fork object to another process.
+AnyEvent::Fork $fh> to create a new C<AnyEvent::Fork> object from it,
+thereby effectively passing a fork object to another process.
 
 =cut
 
@@ -1062,6 +1089,10 @@ L<AnyEvent::Fork::Early>, to avoid executing a perl interpreter at all
 
 L<AnyEvent::Fork::Template>, to create a process by forking the main
 program at a convenient time (part of this distribution).
+
+L<AnyEvent::Fork::Remote>, for another way to create processes that is
+mostly compatible to this module and modules building on top of it, but
+works better with remote processes.
 
 L<AnyEvent::Fork::RPC>, for simple RPC to child processes (on CPAN).
 

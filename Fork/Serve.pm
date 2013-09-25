@@ -33,12 +33,12 @@ sub serve {
       # an IO::FDPass::send request.
 
       my $len;
-      sysread $master, $len, 5 - length $len, length $len or return
+      sysread $master, $len, 5 - length $len, length $len or last
          while 5 > length $len;
       ($cmd, $len) = unpack "a L", $len;
 
       my $buf;
-      sysread $master, $buf, $len - length $buf, length $buf or return
+      sysread $master, $buf, $len - length $buf, length $buf or last
          while $len > length $buf;
 
       if ($cmd eq "h") {
@@ -56,10 +56,10 @@ sub serve {
 
          if ($pid eq 0) {
             $0 = "AnyEvent::Fork of $OWNER";
-            @_ = pop @arg;
-            goto &serve; #closes $master
+            $master = pop @arg;
+
          } else {
-            @arg = ();
+            pop @arg;
 
             $pid
                or $error->("AnyEvent::Fork::Serve: fork() failed: $!");

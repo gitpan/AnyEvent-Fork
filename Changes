@@ -1,6 +1,15 @@
 Revision history for Perl extension AnyEvent::Fork
 
-TODO: maybe set child watcher?
+1.2  Wed Sep 25 13:05:09 CEST 2013
+	- ->fork would not clone, but erase the arguments in the parent
+          (analyzed by Christopher Paulicka).
+	- mention AnyEvent::Fork::Remote, and how to be compatible to it
+          in the description of the run method.
+        - AnyEvent::Fork now sets a child watcher for direct children.
+        - clarify that one might need to set a child watcher.
+        - explicitly call exit on eof in children, to hide(!) win32 perl
+          bugs. at least the test suite doesn't complain anymore, but
+          the bug is doubtlessly still there.
 
 1.1  Sun Apr 28 15:47:38 CEST 2013
 	- (hopefully) remove dependency on common::sense in child code.
